@@ -1,7 +1,7 @@
 import os
 
 # ── FRED API ──────────────────────────────────────────────────────────────────
-FRED_API_KEY = os.getenv("FRED_API_KEY", "YOUR_FRED_API_KEY_HERE")
+FRED_API_KEY = os.getenv("FRED_API_KEY", "87c04efcdf543072107e53f957356b52")
 
 # ── Universe ──────────────────────────────────────────────────────────────────
 COUNTRY_ETFS = {

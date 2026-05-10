@@ -13,6 +13,8 @@ def main():
     print("=" * 55)
     print("  GLOBAL MACRO COUNTRY ROTATION STRATEGY")
     print("=" * 55)
+    import sys
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
     print("\n[1/4] Fetching data...")
     data = fetch_all()

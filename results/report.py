@@ -88,26 +88,26 @@ def print_tearsheet(results: dict):
     h_cost  = results["holding_costs"].dropna()
 
     print("\n" + "=" * 55)
-    print("  GLOBAL MACRO COUNTRY ROTATION — PERFORMANCE TEARSHEET")
+    print("  GLOBAL MACRO COUNTRY ROTATION - PERFORMANCE TEARSHEET")
     print("=" * 55)
 
-    print("\n── Strategy (Net) ──────────────────────────────────────")
+    print("\n-- Strategy (Net) " + "-" * 37)
     metrics = compute_metrics(net_ret, spy_ret)
     for k, v in metrics.items():
         print(f"  {k:<20} {v}")
 
-    print("\n── Benchmark S&P 500 ───────────────────────────────────")
+    print("\n-- Benchmark S&P 500 " + "-" * 34)
     spy_metrics = compute_metrics(spy_ret)
     for k, v in spy_metrics.items():
         print(f"  {k:<20} {v}")
 
-    print("\n── Cost Breakdown (annualized) ─────────────────────────")
+    print("\n-- Cost Breakdown (annualized) " + "-" * 24)
     print(f"  Gross Return:        {gross.mean() * 12:.2%}")
     print(f"  Transaction Costs:   {tx_cost.mean() * 12:.2%}")
     print(f"  Holding Costs:       {h_cost.mean() * 12:.2%}")
     print(f"  Net Return:          {net_ret.mean() * 12:.2%}")
 
-    print("\n── Annual Returns ──────────────────────────────────────")
+    print("\n-- Annual Returns " + "-" * 37)
     annual = net_ret.resample("YE").apply(lambda x: (1 + x).prod() - 1)
     spy_annual = spy_ret.resample("YE").apply(lambda x: (1 + x).prod() - 1)
     for yr in annual.index:

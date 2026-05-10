@@ -8,189 +8,158 @@ from config import COUNTRY_ETFS, SIGNAL_WEIGHTS
 
 
 def zscore(series: pd.Series, window: int = 36) -> pd.Series:
-    roll = series.rolling(window)
+    roll = series.rolling(window, min_periods=12)
     return (series - roll.mean()) / roll.std()
 
 
-def compute_macro_signals(fred_data: pd.DataFrame) -> pd.DataFrame:
-    signals = pd.DataFrame(index=fred_data.index)
+def crosssectional_zscore(df: pd.DataFrame) -> pd.DataFrame:
+    return df.apply(lambda row: (row - row.mean()) / row.std() if row.std() > 0 else row * 0, axis=1)
 
-    # Yield curve — steeper = risk on
-    signals["yield_curve"] = fred_data["treasury_10y"] - fred_data["treasury_2y"]
 
-    # Fed funds momentum — rising = tightening = risk off
-    signals["fed_funds_rate"] = -fred_data["fed_funds_rate"].diff(3)
+def compute_macro_regime(fred_data: pd.DataFrame) -> pd.DataFrame:
+    m = fred_data.copy().resample("ME").last().ffill()
+    signals = pd.DataFrame(index=m.index)
 
-    # Real yield — higher real yield = tighter = risk off
-    signals["real_yield"] = -fred_data["real_yield_10y"]
+    if "treasury_10y" in m.columns and "treasury_2y" in m.columns:
+        signals["yield_curve"] = zscore(m["treasury_10y"] - m["treasury_2y"])
 
-    # Industrial production momentum
-    signals["industrial_production"] = fred_data["industrial_production"].pct_change(3)
+    if "fed_funds_rate" in m.columns:
+        signals["fed_funds_rate"] = zscore(-m["fed_funds_rate"].diff(3))
 
-    # ISM PMI — above 50 = expansion
-    signals["ism_pmi"] = fred_data["ism_pmi"] - 50
+    if "real_yield_10y" in m.columns:
+        signals["real_yield"] = zscore(-m["real_yield_10y"])
 
-    # Jobless claims — falling = good
-    signals["jobless_claims"] = -fred_data["jobless_claims"].pct_change(3)
-    signals["jobless_claims_chg"] = -fred_data["jobless_claims"].diff(3)
+    if "industrial_production" in m.columns:
+        signals["industrial_production"] = zscore(m["industrial_production"].pct_change(3))
 
-    # Unemployment — falling = good
-    signals["unemployment_rate"] = -fred_data["unemployment_rate"].diff(3)
+    if "cfnai" in m.columns:
+        signals["ism_pmi"] = zscore(m["cfnai"])
 
-    # CPI trend — rising inflation = risk off
-    signals["cpi_trend"] = -fred_data["cpi"].pct_change(12)
+    if "jobless_claims" in m.columns:
+        signals["jobless_claims"] = zscore(-m["jobless_claims"].pct_change(3))
+        signals["jobless_claims_chg"] = zscore(-m["jobless_claims"].diff(3))
 
-    # PPI trend — leading inflation signal
-    signals["ppi_trend"] = -fred_data["ppi"].pct_change(12)
+    if "unemployment_rate" in m.columns:
+        signals["unemployment_rate"] = zscore(-m["unemployment_rate"].diff(3))
 
-    # Breakeven inflation — rising = reflationary
-    signals["breakeven_inflation"] = fred_data["breakeven_inflation"].diff(3)
+    if "cpi" in m.columns:
+        signals["cpi_trend"] = zscore(-m["cpi"].pct_change(12))
 
-    # HY spreads — tightening = risk on
-    signals["hy_spreads"] = -fred_data["hy_spreads"].diff(3)
+    if "ppi" in m.columns:
+        signals["ppi_trend"] = zscore(-m["ppi"].pct_change(12))
 
-    # Z-score all signals for comparability
-    for col in signals.columns:
-        signals[col] = zscore(signals[col])
+    if "breakeven_inflation" in m.columns:
+        signals["breakeven_inflation"] = zscore(m["breakeven_inflation"].diff(3))
+
+    if "hy_spreads" in m.columns:
+        signals["hy_spreads"] = zscore(-m["hy_spreads"].diff(3))
 
     return signals
 
 
 def compute_commodity_signals(commodity_prices: pd.DataFrame) -> pd.DataFrame:
-    signals = pd.DataFrame(index=commodity_prices.index)
+    m = commodity_prices.resample("ME").last().ffill()
+    signals = pd.DataFrame(index=m.index)
 
-    # Monthly prices
-    monthly = commodity_prices.resample("ME").last()
-
-    # Oil momentum (3m)
-    signals["oil_momentum"] = monthly["oil"].pct_change(3)
-
-    # Copper momentum (3m) — global growth proxy
-    signals["copper_momentum"] = monthly["copper"].pct_change(3)
-
-    # Gold momentum — safe haven signal
-    signals["gold_momentum"] = monthly["gold"].pct_change(3)
-
-    # DXY — strong dollar hurts EM, invert
-    signals["dxy_momentum"] = -monthly["dxy"].pct_change(3)
-
-    # VIX — high VIX = risk off, invert
-    signals["vix_level"] = -monthly["vix"].pct_change(1)
-
-    for col in signals.columns:
-        signals[col] = zscore(signals[col])
+    if "oil" in m.columns:
+        signals["oil_momentum"] = zscore(m["oil"].pct_change(3))
+    if "copper" in m.columns:
+        signals["copper_momentum"] = zscore(m["copper"].pct_change(3))
+    if "gold" in m.columns:
+        signals["gold_momentum"] = zscore(m["gold"].pct_change(3))
+    if "dxy" in m.columns:
+        signals["dxy_momentum"] = zscore(-m["dxy"].pct_change(3))
+    if "vix" in m.columns:
+        signals["vix_level"] = zscore(-m["vix"])
 
     return signals
 
 
-def compute_momentum_signals(etf_prices: pd.DataFrame) -> pd.DataFrame:
-    monthly = etf_prices.resample("ME").last()
-    signals_12_1 = {}
-    signals_3m = {}
+COMMODITY_SENSITIVITY = {
+    "EWZ":  {"oil": 1.5,  "copper": 1.0, "gold": 0.5,  "dxy": -1.5, "vix": -1.0},
+    "EWJ":  {"oil": -1.0, "copper": 0.5, "gold": 0.5,  "dxy":  0.5, "vix": -0.5},
+    "EWG":  {"oil": -0.5, "copper": 1.0, "gold": 0.0,  "dxy":  0.5, "vix": -0.5},
+    "EWC":  {"oil": 1.5,  "copper": 0.5, "gold": 1.0,  "dxy": -1.0, "vix": -0.5},
+    "EWA":  {"oil": 0.5,  "copper": 1.5, "gold": 1.5,  "dxy": -1.0, "vix": -0.5},
+    "EWU":  {"oil": 0.5,  "copper": 0.5, "gold": 0.5,  "dxy":  0.0, "vix": -0.5},
+    "MCHI": {"oil": -0.5, "copper": 1.5, "gold": 0.5,  "dxy": -1.5, "vix": -1.0},
+    "EWY":  {"oil": -1.0, "copper": 1.0, "gold": 0.0,  "dxy": -1.0, "vix": -1.0},
+    "EWT":  {"oil": -0.5, "copper": 0.5, "gold": 0.0,  "dxy": -0.5, "vix": -1.0},
+    "EWI":  {"oil": -0.5, "copper": 0.5, "gold": 0.0,  "dxy":  0.5, "vix": -0.5},
+    "EWP":  {"oil": -0.5, "copper": 0.5, "gold": 0.0,  "dxy":  0.5, "vix": -0.5},
+    "INDA": {"oil": -1.0, "copper": 0.5, "gold": 1.0,  "dxy": -1.5, "vix": -1.0},
+    "SPY":  {"oil":  0.0, "copper": 0.5, "gold": 0.0,  "dxy":  0.0, "vix": -0.5},
+}
 
-    for country, ticker in COUNTRY_ETFS.items():
-        if ticker not in monthly.columns:
-            continue
-        prices = monthly[ticker]
-        # 12-1 month momentum (skip last month)
-        signals_12_1[ticker] = prices.pct_change(12) - prices.pct_change(1)
-        # 3 month momentum
-        signals_3m[ticker] = prices.pct_change(3)
-
-    mom_12_1 = pd.DataFrame(signals_12_1)
-    mom_3m = pd.DataFrame(signals_3m)
-
-    # Cross-sectional z-score (rank within universe each month)
-    mom_12_1 = mom_12_1.apply(lambda row: (row - row.mean()) / row.std(), axis=1)
-    mom_3m = mom_3m.apply(lambda row: (row - row.mean()) / row.std(), axis=1)
-
-    return mom_12_1, mom_3m
+COMM_SIGNAL_MAP = {
+    "oil":    "oil_momentum",
+    "copper": "copper_momentum",
+    "gold":   "gold_momentum",
+    "dxy":    "dxy_momentum",
+    "vix":    "vix_level",
+}
 
 
 def build_composite_score(fred_data, commodity_prices, etf_prices) -> pd.DataFrame:
-    macro = compute_macro_signals(fred_data)
-    commodity = compute_commodity_signals(commodity_prices)
-    mom_12_1, mom_3m = compute_momentum_signals(etf_prices)
+    macro   = compute_macro_regime(fred_data)
+    comm    = compute_commodity_signals(commodity_prices)
+    monthly = etf_prices.resample("ME").last()
 
-    # Align all to monthly
-    macro = macro.resample("ME").last()
-    commodity = commodity.resample("ME").last()
+    # Momentum signals (cross-sectional z-score)
+    mom_12_1 = crosssectional_zscore(monthly.pct_change(12) - monthly.pct_change(1))
+    mom_3m   = crosssectional_zscore(monthly.pct_change(3))
 
-    # Global macro signals apply equally to all countries
-    # Commodity signals are tilted by country sensitivity
-    commodity_sensitivity = {
-        "EWZ": {"oil": 1.5,  "copper": 1.0, "gold": 0.5, "dxy": -1.5},
-        "EWJ": {"oil": -1.0, "copper": 0.5, "gold": 0.5, "dxy":  0.5},
-        "EWG": {"oil": -0.5, "copper": 1.0, "gold": 0.0, "dxy":  0.5},
-        "EWC": {"oil": 1.5,  "copper": 0.5, "gold": 1.0, "dxy": -1.0},
-        "EWA": {"oil": 0.5,  "copper": 1.5, "gold": 1.5, "dxy": -1.0},
-        "EWU": {"oil": 0.5,  "copper": 0.5, "gold": 0.5, "dxy":  0.0},
-        "MCHI":{"oil": -0.5, "copper": 1.5, "gold": 0.5, "dxy": -1.5},
-        "EWY": {"oil": -1.0, "copper": 1.0, "gold": 0.0, "dxy": -1.0},
-        "EWT": {"oil": -0.5, "copper": 0.5, "gold": 0.0, "dxy": -0.5},
-        "EWI": {"oil": -0.5, "copper": 0.5, "gold": 0.0, "dxy":  0.5},
-        "EWP": {"oil": -0.5, "copper": 0.5, "gold": 0.0, "dxy":  0.5},
-        "INDA":{"oil": -1.0, "copper": 0.5, "gold": 1.0, "dxy": -1.5},
-        "SPY": {"oil":  0.0, "copper": 0.5, "gold": 0.0, "dxy":  0.0},
-    }
-
+    # Common date index (monthly)
+    dates = macro.index
     tickers = list(COUNTRY_ETFS.values())
-    all_dates = macro.index.union(commodity.index).union(mom_12_1.index)
-    macro = macro.reindex(all_dates).ffill()
-    commodity = commodity.reindex(all_dates).ffill()
-    mom_12_1 = mom_12_1.reindex(all_dates).ffill()
-    mom_3m = mom_3m.reindex(all_dates).ffill()
 
-    composite = pd.DataFrame(index=all_dates, columns=tickers, dtype=float)
+    composite = pd.DataFrame(index=dates, columns=tickers, dtype=float)
 
-    macro_signal_cols = [c for c in macro.columns if c in SIGNAL_WEIGHTS]
-    macro_weight_total = sum(SIGNAL_WEIGHTS[c] for c in macro_signal_cols)
+    # Macro weight total for normalisation
+    macro_cols = [c for c in macro.columns if c in SIGNAL_WEIGHTS]
+    macro_w    = sum(SIGNAL_WEIGHTS[c] for c in macro_cols)
 
-    for ticker in tickers:
-        sens = commodity_sensitivity.get(ticker, {})
+    for date in dates:
+        macro_row = macro.loc[date]
+        comm_row  = comm.reindex([date]).iloc[0] if date in comm.index else pd.Series(dtype=float)
 
-        # Macro component (same for all countries — global regime)
+        # Macro regime score (same for all countries)
         macro_score = sum(
-            macro[col] * SIGNAL_WEIGHTS[col]
-            for col in macro_signal_cols
-            if col in macro.columns
-        ) / macro_weight_total
-
-        # Commodity component (country-specific sensitivity)
-        comm_score = (
-            commodity.get("oil_momentum", 0) * sens.get("oil", 0) * SIGNAL_WEIGHTS["oil_momentum"] +
-            commodity.get("copper_momentum", 0) * sens.get("copper", 0) * SIGNAL_WEIGHTS["copper_momentum"] +
-            commodity.get("gold_momentum", 0) * sens.get("gold", 0) * SIGNAL_WEIGHTS["gold_momentum"] +
-            commodity.get("dxy_momentum", 0) * sens.get("dxy", 0) * SIGNAL_WEIGHTS["dxy_momentum"] +
-            commodity.get("vix_level", 0) * SIGNAL_WEIGHTS["vix_level"] +
-            commodity.get("hy_spreads", 0) * SIGNAL_WEIGHTS.get("hy_spreads", 0.05)
+            macro_row.get(c, np.nan) * SIGNAL_WEIGHTS[c]
+            for c in macro_cols
+            if not np.isnan(macro_row.get(c, np.nan))
         )
+        macro_norm = macro_score / macro_w if macro_w > 0 else 0.0
 
-        # Momentum component
-        mom_score = (
-            mom_12_1.get(ticker, pd.Series(0, index=all_dates)) * SIGNAL_WEIGHTS["momentum_12_1"] +
-            mom_3m.get(ticker, pd.Series(0, index=all_dates)) * SIGNAL_WEIGHTS["momentum_3m"]
-        )
+        for ticker in tickers:
+            sens = COMMODITY_SENSITIVITY.get(ticker, {})
 
-        composite[ticker] = (
-            macro_score * macro_weight_total +
-            comm_score +
-            mom_score
-        )
+            # Commodity component (country-specific sensitivity)
+            comm_score = 0.0
+            for asset, sig_col in COMM_SIGNAL_MAP.items():
+                if sig_col in comm_row.index and not np.isnan(comm_row.get(sig_col, np.nan)):
+                    comm_score += comm_row[sig_col] * sens.get(asset, 0.0) * SIGNAL_WEIGHTS.get(sig_col, 0.0)
 
+            # Momentum
+            mom_score = 0.0
+            if date in mom_12_1.index and ticker in mom_12_1.columns:
+                v = mom_12_1.loc[date, ticker]
+                if not np.isnan(v):
+                    mom_score += v * SIGNAL_WEIGHTS["momentum_12_1"]
+            if date in mom_3m.index and ticker in mom_3m.columns:
+                v = mom_3m.loc[date, ticker]
+                if not np.isnan(v):
+                    mom_score += v * SIGNAL_WEIGHTS["momentum_3m"]
+
+            composite.loc[date, ticker] = macro_norm + comm_score + mom_score
+
+    composite = composite.apply(pd.to_numeric, errors="coerce")
     return composite.dropna(how="all")
 
 
 if __name__ == "__main__":
-    import sys
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from data.fetch_data import fetch_all
-
     data = fetch_all()
-    scores = build_composite_score(
-        data["fred_data"],
-        data["commodity_prices"],
-        data["etf_prices"],
-    )
-    print("Composite scores (last 3 months):")
+    scores = build_composite_score(data["fred_data"], data["commodity_prices"], data["etf_prices"])
+    print("Score shape:", scores.shape)
     print(scores.tail(3).round(3))

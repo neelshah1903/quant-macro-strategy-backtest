@@ -20,7 +20,7 @@ FRED_SERIES = {
     "unemployment_rate":     "UNRATE",
     "jobless_claims":        "ICSA",
     "industrial_production": "INDPRO",
-    "ism_pmi":               "NAPM",
+    "cfnai":                 "CFNAI",
     "hy_spreads":            "BAMLH0A0HYM2",
     "baa_spread":            "BAA",
 }
