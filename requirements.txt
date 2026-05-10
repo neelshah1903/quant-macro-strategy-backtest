@@ -1,0 +1,9 @@
+yfinance>=0.2.40
+pandas>=2.0.0
+numpy>=1.26.0
+fredapi>=0.5.1
+pandas-datareader>=0.10.0
+matplotlib>=3.8.0
+plotly>=5.20.0
+quantstats>=0.0.62
+streamlit>=1.32.0
